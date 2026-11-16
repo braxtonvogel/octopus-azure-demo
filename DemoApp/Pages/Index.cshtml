@@ -4,7 +4,8 @@
 
 <h1>Notes</h1>
 <form method="post" class="mb-3">
-    <input asp-for="NewText" class="form-control mb-2" placeholder="Write a note..." />
+    <input asp-for="NewText" class="form-control mb-2" placeholder="Write a note..." maxlength="500" />
+    <span asp-validation-for="NewText" class="text-danger"></span>
     <button type="submit" class="btn btn-primary">Add note</button>
 </form>
 <ul>
