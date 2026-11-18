@@ -30,7 +30,7 @@ Write-Host "Deploying $image to $appName in $resourceGroup ($($OctopusParameters
 # 1) Roll a new revision on the pinned image, wiring the env var to the secret.
 az containerapp update --name $appName --resource-group $resourceGroup `
     --image $image `
-    --set-env-vars "ConnectionStrings__Default=secretref:db-conn" --output none
+    --set-env-vars "ConnectionStrings__Default=secretref:db-conn" --output none --only-show-errors
 if ($LASTEXITCODE -ne 0) { throw "az containerapp update failed (exit $LASTEXITCODE)." }
 
 # 2) Fail the step unless the new revision becomes ready (catches crash-looping revisions).
@@ -39,7 +39,7 @@ do {
     Start-Sleep -Seconds 15
     $state = az containerapp show --name $appName --resource-group $resourceGroup `
         --query "{latest:properties.latestRevisionName, ready:properties.latestReadyRevisionName, fqdn:properties.configuration.ingress.fqdn}" `
-        --output json | ConvertFrom-Json
+        --output json --only-show-errors | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw "az containerapp show failed (exit $LASTEXITCODE)." }
     if ($state.latest -and $state.latest -eq $state.ready) { break }
     Write-Host "Waiting for revision $($state.latest) to become ready (ready: $($state.ready))..."

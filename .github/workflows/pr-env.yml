@@ -84,10 +84,75 @@ jobs:
           server: ${{ vars.OCTOPUS_URL }}
           service_account_id: ${{ vars.OCTOPUS_SERVICE_ACCOUNT_ID }}
 
+      # Octopus refuses to deprovision an environment with an active deployment (seen on PR #4:
+      # closing mid-deploy). Wait for pr-<N>'s queued/running tasks to finish first (best effort).
+      - name: Wait for active deployments in the PR environment
+        env:
+          PR_ENV: ${{ env.EPHEMERAL_ENV }}
+        run: |
+          set -u
+          auth="Authorization: Bearer ${OCTOPUS_ACCESS_TOKEN}"
+          space_id=$(curl -fsS -H "$auth" "${OCTOPUS_URL%/}/api/spaces/all" \
+            | jq -r --arg n "$OCTOPUS_SPACE" '.[] | select(.Name == $n) | .Id' || true)
+          if [ -z "$space_id" ]; then
+            echo "::warning::Couldn't look up space '$OCTOPUS_SPACE'; relying on deprovision retries."
+            exit 0
+          fi
+          deadline=$(( $(date +%s) + 900 ))
+          while :; do
+            # Active task descriptions end in "... to pr-<N>" (deploys) or name the env (runbooks).
+            active=$(curl -fsS -H "$auth" "${OCTOPUS_URL%/}/api/${space_id}/tasks?active=true&take=200" \
+              | jq --arg e "$PR_ENV" '[.Items[] | select(.Description | test("\\b" + $e + "$|\\b" + $e + "\\b"))] | length' || echo "?")
+            if [ "$active" = "0" ]; then echo "No active tasks for $PR_ENV."; break; fi
+            if [ "$active" = "?" ]; then echo "::warning::Task lookup failed; relying on deprovision retries."; break; fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then echo "::warning::$active task(s) still active after 15 min; trying anyway."; break; fi
+            echo "$active active task(s) for $PR_ENV; waiting 20s..."
+            sleep 20
+          done
+
       # Runs the project's deprovision runbook (deletes notes-app-pr-<N> and notes-pr-<N>).
-      # continue-on-error: a PR closed before it ever deployed has no environment to remove.
-      - name: Deprovision ephemeral environment
+      # Retried with pauses (about 10 min total) in case a deployment is still finishing.
+      - name: Deprovision ephemeral environment (attempt 1)
+        id: deprov1
         continue-on-error: true
+        uses: OctopusDeploy/deprovision-ephemeral-environment@v1
+        with:
+          name: ${{ env.EPHEMERAL_ENV }}
+          project: ${{ env.OCTOPUS_PROJECT }}
+
+      - name: Pause before retry
+        if: steps.deprov1.outcome == 'failure'
+        run: sleep 150
+
+      - name: Deprovision ephemeral environment (attempt 2)
+        id: deprov2
+        if: steps.deprov1.outcome == 'failure'
+        continue-on-error: true
+        uses: OctopusDeploy/deprovision-ephemeral-environment@v1
+        with:
+          name: ${{ env.EPHEMERAL_ENV }}
+          project: ${{ env.OCTOPUS_PROJECT }}
+
+      - name: Pause before retry
+        if: steps.deprov2.outcome == 'failure'
+        run: sleep 210
+
+      - name: Deprovision ephemeral environment (attempt 3)
+        id: deprov3
+        if: steps.deprov2.outcome == 'failure'
+        continue-on-error: true
+        uses: OctopusDeploy/deprovision-ephemeral-environment@v1
+        with:
+          name: ${{ env.EPHEMERAL_ENV }}
+          project: ${{ env.OCTOPUS_PROJECT }}
+
+      - name: Pause before retry
+        if: steps.deprov3.outcome == 'failure'
+        run: sleep 240
+
+      # Last attempt has no continue-on-error: if it fails, the job fails (no silent leftovers).
+      - name: Deprovision ephemeral environment (final attempt)
+        if: steps.deprov3.outcome == 'failure'
         uses: OctopusDeploy/deprovision-ephemeral-environment@v1
         with:
           name: ${{ env.EPHEMERAL_ENV }}
