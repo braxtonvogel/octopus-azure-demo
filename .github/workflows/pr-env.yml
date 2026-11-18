@@ -87,6 +87,7 @@ jobs:
       # Octopus refuses to deprovision an environment with an active deployment (seen on PR #4:
       # closing mid-deploy). Wait for pr-<N>'s queued/running tasks to finish first (best effort).
       - name: Wait for active deployments in the PR environment
+        id: precheck
         env:
           PR_ENV: ${{ env.EPHEMERAL_ENV }}
         run: |
@@ -98,11 +99,24 @@ jobs:
             echo "::warning::Couldn't look up space '$OCTOPUS_SPACE'; relying on deprovision retries."
             exit 0
           fi
+          # A PR closed before it ever deployed has no pr-<N> environment: nothing to remove.
+          # If this lookup itself fails, fall through and run the retries anyway.
+          if envs=$(curl -fsS -H "$auth" "${OCTOPUS_URL%/}/api/${space_id}/environments?partialName=${PR_ENV}&take=100"); then
+            found=$(echo "$envs" | jq --arg e "$PR_ENV" '[.Items[] | select(.Name == $e)] | length' || echo "?")
+            if [ "$found" = "0" ]; then
+              echo "::notice::Environment $PR_ENV doesn't exist (PR never deployed); skipping deprovision."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            echo "::warning::Environment lookup failed; running deprovision anyway."
+          fi
           deadline=$(( $(date +%s) + 900 ))
           while :; do
             # Active task descriptions end in "... to pr-<N>" (deploys) or name the env (runbooks).
             active=$(curl -fsS -H "$auth" "${OCTOPUS_URL%/}/api/${space_id}/tasks?active=true&take=200" \
               | jq --arg e "$PR_ENV" '[.Items[] | select(.Description | test("\\b" + $e + "$|\\b" + $e + "\\b"))] | length' || echo "?")
+            [ -z "$active" ] && active="?"   # curl failure leaves jq output empty (no pipefail)
             if [ "$active" = "0" ]; then echo "No active tasks for $PR_ENV."; break; fi
             if [ "$active" = "?" ]; then echo "::warning::Task lookup failed; relying on deprovision retries."; break; fi
             if [ "$(date +%s)" -ge "$deadline" ]; then echo "::warning::$active task(s) still active after 15 min; trying anyway."; break; fi
@@ -114,6 +128,7 @@ jobs:
       # Retried with pauses (about 10 min total) in case a deployment is still finishing.
       - name: Deprovision ephemeral environment (attempt 1)
         id: deprov1
+        if: steps.precheck.outputs.skip != 'true'
         continue-on-error: true
         uses: OctopusDeploy/deprovision-ephemeral-environment@v1
         with:
