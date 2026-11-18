@@ -100,9 +100,9 @@ jobs:
             exit 0
           fi
           # A PR closed before it ever deployed has no pr-<N> environment: nothing to remove.
-          # If this lookup itself fails, fall through and run the retries anyway.
-          if envs=$(curl -fsS -H "$auth" "${OCTOPUS_URL%/}/api/${space_id}/environments?partialName=${PR_ENV}&take=100"); then
-            found=$(echo "$envs" | jq --arg e "$PR_ENV" '[.Items[] | select(.Name == $e)] | length' || echo "?")
+          # Ephemeral envs are only listed by environments/v2. If this lookup fails, run the retries anyway.
+          if envs=$(curl -fsS -H "$auth" "${OCTOPUS_URL%/}/api/${space_id}/environments/v2?partialName=${PR_ENV}&skip=0&take=100"); then
+            found=$(echo "$envs" | jq --arg e "$PR_ENV" '[.Items[] | select(.Name == $e and ((.Type // "Ephemeral") == "Ephemeral"))] | length' || echo "?")
             if [ "$found" = "0" ]; then
               echo "::notice::Environment $PR_ENV doesn't exist (PR never deployed); skipping deprovision."
               echo "skip=true" >> "$GITHUB_OUTPUT"
