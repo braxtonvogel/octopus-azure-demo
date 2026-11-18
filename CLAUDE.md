@@ -17,7 +17,7 @@ Octopus Deploy, Azure Container Apps, Azure SQL. The container listens on 8080.
 - `DemoApp/`: the app. `Program.cs` (startup, runs `Database.Migrate()`), `Data/` (DbContext), `Pages/`, `Migrations/`.
 - `Dockerfile`: multi-stage build of DemoApp.
 - `.github/workflows/build.yml`: push to main -> `ghcr.io/braxtonvogel/octopus-azure-demo:1.0.<run>`.
-- `.github/workflows/pr-env.yml`: same-repo PRs -> `:1.0.0-pr.<N>.<run>` + Octopus release; cleanup on close.
+- `.github/workflows/pr-env.yml`: same-repo PRs -> `:1.0.0-pr.<N>.<run>.<attempt>` + Octopus release; cleanup on close.
 - `octopus/`: Octopus scripts (`deploy-step.ps1`, PR env provision/deprovision runbooks).
 
 ## Conventions

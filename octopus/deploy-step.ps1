@@ -18,7 +18,7 @@ $channel     = $OctopusParameters['Octopus.Release.Channel.Name']
 $isPrChannel = $channel -eq 'PR Environments'
 if ($version -match '^1\.0\.\d+$') {
     # pinned main build: allowed in every channel
-} elseif ($isPrChannel -and $version -match '^1\.0\.0-pr\.\d+\.\d+$') {
+} elseif ($isPrChannel -and $version -match '^1\.0\.0-pr\.\d+\.\d+\.\d+$') {
     if ($appName -notlike 'notes-app-pr-*') { throw "PR image $version can only deploy to a notes-app-pr-* app, not '$appName'." }
 } else {
     throw "notes-image version '$version' isn't allowed in channel '$channel' (main: 1.0.N; PR Environments: 1.0.N or 1.0.0-pr.N.R; never 'latest')."

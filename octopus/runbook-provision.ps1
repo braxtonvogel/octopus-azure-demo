@@ -75,9 +75,7 @@ $rng.Dispose()
 if ($password -notmatch '^[A-Za-z0-9]{32}$' -or $dbUser -notmatch '^[a-z_]+$' -or $dbName -notmatch '^[a-z0-9-]+$') {
     throw 'Generated SQL identifiers or password failed validation.'
 }
-if (Get-Command Set-OctopusVariable -ErrorAction SilentlyContinue) {
-    Set-OctopusVariable -name 'DbUserPassword' -value $password -sensitive   # registers it for log masking
-}
+# The password is never printed or saved as an output variable; it only goes to SQL and the app's secret.
 
 $token = az account get-access-token --resource https://database.windows.net/ --query accessToken --output tsv --only-show-errors
 Assert-Az 'az account get-access-token'

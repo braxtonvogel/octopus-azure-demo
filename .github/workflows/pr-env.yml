@@ -30,7 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Semver (not pr-N) because Octopus Docker feeds parse tags as semver. No latest tag.
-      VERSION: 1.0.0-pr.${{ github.event.pull_request.number }}.${{ github.run_number }}
+      # run_attempt keeps a re-run of the same workflow run from colliding with an existing release.
+      VERSION: 1.0.0-pr.${{ github.event.pull_request.number }}.${{ github.run_number }}.${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -84,7 +85,9 @@ jobs:
           service_account_id: ${{ vars.OCTOPUS_SERVICE_ACCOUNT_ID }}
 
       # Runs the project's deprovision runbook (deletes notes-app-pr-<N> and notes-pr-<N>).
+      # continue-on-error: a PR closed before it ever deployed has no environment to remove.
       - name: Deprovision ephemeral environment
+        continue-on-error: true
         uses: OctopusDeploy/deprovision-ephemeral-environment@v1
         with:
           name: ${{ env.EPHEMERAL_ENV }}
