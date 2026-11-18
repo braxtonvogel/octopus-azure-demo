@@ -1,0 +1,174 @@
+name: pr-env
+# Per-PR ephemeral environments: build a PR image, then let Octopus create/deploy env pr-<N>.
+# Same-repo PRs only; never pull_request_target (it would run PR code with write access and secrets).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [main]
+
+permissions:
+  id-token: write   # OIDC sign-in to Octopus (no API key stored anywhere)
+  packages: write   # push the PR image to GHCR
+  contents: read
+
+concurrency:
+  group: pr-env-${{ github.event.pull_request.number }}
+  cancel-in-progress: false   # never cancel a half-done deploy or cleanup
+
+env:
+  OCTOPUS_SPACE: ${{ vars.OCTOPUS_SPACE || 'Default' }}
+  OCTOPUS_PROJECT: Notes App
+  # Octopus env name comes from the channel's template: pr-#{Octopus.Release.CustomFields[PullRequestNumber]}
+  EPHEMERAL_ENV: pr-${{ github.event.pull_request.number }}
+
+jobs:
+  deploy:
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    env:
+      # Semver (not pr-N) because Octopus Docker feeds parse tags as semver. No latest tag.
+      # run_attempt keeps a re-run of the same workflow run from colliding with an existing release.
+      VERSION: 1.0.0-pr.${{ github.event.pull_request.number }}.${{ github.run_number }}.${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/braxtonvogel/octopus-azure-demo:${{ env.VERSION }}
+
+      - name: Sign in to Octopus (OIDC)
+        uses: OctopusDeploy/login@v2
+        with:
+          server: ${{ vars.OCTOPUS_URL }}
+          service_account_id: ${{ vars.OCTOPUS_SERVICE_ACCOUNT_ID }}
+
+      # Auto-deploy is on for the "PR Environments" channel, so creating the release creates
+      # (or updates) env pr-<N>: the provision runbook runs first, then the deploy step.
+      - name: Create release in PR Environments channel
+        uses: OctopusDeploy/create-release-action@v4
+        with:
+          project: ${{ env.OCTOPUS_PROJECT }}
+          channel: PR Environments
+          release_number: ${{ env.VERSION }}
+          packages: |
+            *:notes-image:${{ env.VERSION }}
+          custom_fields: |
+            PullRequestNumber:${{ github.event.pull_request.number }}
+
+  cleanup:
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Sign in to Octopus (OIDC)
+        uses: OctopusDeploy/login@v2
+        with:
+          server: ${{ vars.OCTOPUS_URL }}
+          service_account_id: ${{ vars.OCTOPUS_SERVICE_ACCOUNT_ID }}
+
+      # Octopus refuses to deprovision an environment with an active deployment (seen on PR #4:
+      # closing mid-deploy). Wait for pr-<N>'s queued/running tasks to finish first (best effort).
+      - name: Wait for active deployments in the PR environment
+        id: precheck
+        env:
+          PR_ENV: ${{ env.EPHEMERAL_ENV }}
+        run: |
+          set -u
+          auth="Authorization: Bearer ${OCTOPUS_ACCESS_TOKEN}"
+          space_id=$(curl -fsS -H "$auth" "${OCTOPUS_URL%/}/api/spaces/all" \
+            | jq -r --arg n "$OCTOPUS_SPACE" '.[] | select(.Name == $n) | .Id' || true)
+          if [ -z "$space_id" ]; then
+            echo "::warning::Couldn't look up space '$OCTOPUS_SPACE'; relying on deprovision retries."
+            exit 0
+          fi
+          # A PR closed before it ever deployed has no pr-<N> environment: nothing to remove.
+          # Ephemeral envs are only listed by environments/v2. If this lookup fails, run the retries anyway.
+          if envs=$(curl -fsS -H "$auth" "${OCTOPUS_URL%/}/api/${space_id}/environments/v2?partialName=${PR_ENV}&skip=0&take=100"); then
+            found=$(echo "$envs" | jq --arg e "$PR_ENV" '[.Items[] | select(.Name == $e and ((.Type // "Ephemeral") == "Ephemeral"))] | length' || echo "?")
+            if [ "$found" = "0" ]; then
+              echo "::notice::Environment $PR_ENV doesn't exist (PR never deployed); skipping deprovision."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            echo "::warning::Environment lookup failed; running deprovision anyway."
+          fi
+          deadline=$(( $(date +%s) + 900 ))
+          while :; do
+            # Active task descriptions end in "... to pr-<N>" (deploys) or name the env (runbooks).
+            active=$(curl -fsS -H "$auth" "${OCTOPUS_URL%/}/api/${space_id}/tasks?active=true&take=200" \
+              | jq --arg e "$PR_ENV" '[.Items[] | select(.Description | test("\\b" + $e + "$|\\b" + $e + "\\b"))] | length' || echo "?")
+            [ -z "$active" ] && active="?"   # curl failure leaves jq output empty (no pipefail)
+            if [ "$active" = "0" ]; then echo "No active tasks for $PR_ENV."; break; fi
+            if [ "$active" = "?" ]; then echo "::warning::Task lookup failed; relying on deprovision retries."; break; fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then echo "::warning::$active task(s) still active after 15 min; trying anyway."; break; fi
+            echo "$active active task(s) for $PR_ENV; waiting 20s..."
+            sleep 20
+          done
+
+      # Runs the project's deprovision runbook (deletes notes-app-pr-<N> and notes-pr-<N>).
+      # Retried with pauses (about 10 min total) in case a deployment is still finishing.
+      - name: Deprovision ephemeral environment (attempt 1)
+        id: deprov1
+        if: steps.precheck.outputs.skip != 'true'
+        continue-on-error: true
+        uses: OctopusDeploy/deprovision-ephemeral-environment@v1
+        with:
+          name: ${{ env.EPHEMERAL_ENV }}
+          project: ${{ env.OCTOPUS_PROJECT }}
+
+      - name: Pause before retry
+        if: steps.deprov1.outcome == 'failure'
+        run: sleep 150
+
+      - name: Deprovision ephemeral environment (attempt 2)
+        id: deprov2
+        if: steps.deprov1.outcome == 'failure'
+        continue-on-error: true
+        uses: OctopusDeploy/deprovision-ephemeral-environment@v1
+        with:
+          name: ${{ env.EPHEMERAL_ENV }}
+          project: ${{ env.OCTOPUS_PROJECT }}
+
+      - name: Pause before retry
+        if: steps.deprov2.outcome == 'failure'
+        run: sleep 210
+
+      - name: Deprovision ephemeral environment (attempt 3)
+        id: deprov3
+        if: steps.deprov2.outcome == 'failure'
+        continue-on-error: true
+        uses: OctopusDeploy/deprovision-ephemeral-environment@v1
+        with:
+          name: ${{ env.EPHEMERAL_ENV }}
+          project: ${{ env.OCTOPUS_PROJECT }}
+
+      - name: Pause before retry
+        if: steps.deprov3.outcome == 'failure'
+        run: sleep 240
+
+      # Last attempt has no continue-on-error: if it fails, the job fails (no silent leftovers).
+      - name: Deprovision ephemeral environment (final attempt)
+        if: steps.deprov3.outcome == 'failure'
+        uses: OctopusDeploy/deprovision-ephemeral-environment@v1
+        with:
+          name: ${{ env.EPHEMERAL_ENV }}
+          project: ${{ env.OCTOPUS_PROJECT }}
