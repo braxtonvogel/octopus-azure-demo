@@ -4,7 +4,19 @@
 
 <h1>Notes</h1>
 <form method="post" class="mb-3">
-    <input asp-for="NewText" class="form-control mb-2" placeholder="Write a note..." maxlength="500" />
+    <input asp-for="NewText" id="note-text" class="form-control mb-2" placeholder="Write a note..." maxlength="500" />
+    @if (Model.ShowCharacterCounter)
+    {
+        <small id="note-counter" class="text-muted d-block mb-2">0 / 500</small>
+        <script>
+            (function () {
+                var box = document.getElementById('note-text'), out = document.getElementById('note-counter');
+                var update = function () { out.textContent = box.value.length + ' / 500'; };
+                box.addEventListener('input', update);
+                update();
+            })();
+        </script>
+    }
     <span asp-validation-for="NewText" class="text-danger"></span>
     <button type="submit" class="btn btn-primary">Add note</button>
 </form>
