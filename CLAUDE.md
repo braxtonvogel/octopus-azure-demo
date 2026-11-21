@@ -25,6 +25,7 @@ Octopus Deploy, Azure Container Apps, Azure SQL. The container listens on 8080.
 - Deploys never use `latest`; versions are pinned (see the version check in `octopus/deploy-step.ps1`).
 - Secrets only via Octopus Sensitive variables and Container Apps `secretref:`. Never in code, logs, or PR text.
 - Migrations are committed with the model change that needs them.
+- Feature flags are Octopus Feature Flags read through OpenFeature (`Program.cs`). `deploy-step.ps1` passes Octopus's client identifier to the app as secret `ff-client-id`; confirm that variable resolves in a real deployment log before relying on it. The deploy script is also stored inline in the Octopus step, so keep the two copies in sync. Flags default to off. Current flag: `note-character-counter`.
 
 ## Definition of done
 - `build` workflow green on the PR's changes; `actionlint` clean for workflow edits.
