@@ -28,7 +28,8 @@ if (!string.IsNullOrWhiteSpace(flagClientId))
         Console.Error.WriteLine($"Warning: Octopus feature flag provider didn't start ({ex.GetType().Name}); flags will use defaults.");
     }
 }
-builder.Services.AddSingleton(_ => Api.Instance.GetClient());
+// Register under the interface: the pages ask for IFeatureClient (an untyped AddSingleton registers the concrete type).
+builder.Services.AddSingleton<IFeatureClient>(_ => Api.Instance.GetClient());
 
 builder.Services.AddDbContext<AppDbContext>(o =>
     o.UseSqlServer(builder.Configuration.GetConnectionString("Default"),
