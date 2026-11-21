@@ -47,13 +47,15 @@ if ($others.Count -ge $maxPrApps) {
 $appExists = @($prApps | Where-Object { $_ -and $_.Trim() -eq $appName }).Count -gt 0
 
 # 2) Free-tier serverless DB (skip if it exists). AutoPause when the monthly free limit runs out.
+#    Max vCores is 1: the subscription's vCore quota is 10 in total, so 2-vCore databases left room for only five
+#    (this once made a PR environment fail with SubscriptionVcoreQuotaExceeded).
 $dbFound = az sql db list --resource-group $resourceGroup --server $sqlServer --query "[?name=='$dbName'].name" --output tsv --only-show-errors
 Assert-Az 'az sql db list'
 if ($dbFound) {
     Write-Host "Database $dbName already exists; keeping it."
 } else {
     az sql db create --resource-group $resourceGroup --server $sqlServer --name $dbName `
-        --edition GeneralPurpose --family Gen5 --capacity 2 --compute-model Serverless `
+        --edition GeneralPurpose --family Gen5 --capacity 1 --compute-model Serverless `
         --use-free-limit --free-limit-exhaustion-behavior AutoPause --output none --only-show-errors
     Assert-Az 'az sql db create'
     Write-Host "Created database $dbName (free offer, AutoPause)."
