@@ -19,7 +19,7 @@ Octopus Deploy, Azure Container Apps, Azure SQL. The container listens on 8080.
 - `.github/workflows/build.yml`: push to main -> `ghcr.io/braxtonvogel/octopus-azure-demo:1.0.<run>`.
 - `.github/workflows/pr-env.yml`: same-repo PRs -> `:1.0.0-pr.<N>.<run>.<attempt>` + Octopus release; cleanup on close.
 - `docs/daily-runbook.md`: the daily run book (morning checklist + what the automated Octopus runbook "Daily health check" does).
-- `octopus/`: Octopus scripts (`deploy-step.ps1`, PR env provision/deprovision runbooks, `runbook-provision-tenant.ps1`, `runbook-daily-health-check.ps1`). Production also has tenants (Tenant A, Tenant B): each has its own Container App `notes-app-<TenantSlug>` and free-tier DB `notes-<TenantSlug>`; `TenantSlug` is a per-tenant project template variable and must be unique per tenant.
+- `octopus/`: Octopus scripts (`deploy-step.ps1`, PR env provision/deprovision runbooks, `runbook-provision-tenant.ps1`, `runbook-daily-health-check.ps1`). New databases are created with 1 max vCore because the subscription's vCore quota is 10 in total (it blocked a PR environment once). Production also has tenants (Tenant A, Tenant B): each has its own Container App `notes-app-<TenantSlug>` and free-tier DB `notes-<TenantSlug>`; `TenantSlug` is a per-tenant project template variable and must be unique per tenant.
 
 ## Conventions
 - Build and release are separate: Actions builds and pushes images; Octopus creates releases and deploys.

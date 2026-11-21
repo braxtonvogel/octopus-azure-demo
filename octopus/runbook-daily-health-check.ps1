@@ -6,7 +6,8 @@
 # Optional, for manual runs only: set an Octopus variable WakeSites to True to also request each site (HTTP 200 and the Notes
 # page). That wakes the apps and their databases, and an app applies any pending database migration at startup, like any visitor.
 # Checks: every Container App provisioned and its latest revision ready; the required apps exist; the running image;
-# the SQL database count on the server (the free-offer limit of 10 is per subscription, so this is only a lower bound).
+# the SQL database count and the total max vCores on the server (the free-offer limit of 10 databases and the vCore quota
+# of 10 both apply to the whole subscription, so these are only lower bounds).
 # Any problem fails the step so it shows up red in Octopus.
 # Windows PowerShell 5.1 on the worker: az queries stay free of parentheses and ! (it passes them to az.cmd unquoted).
 $ErrorActionPreference = 'Stop'   # Doesn't stop on native commands: every az call checks $LASTEXITCODE.
@@ -77,7 +78,13 @@ $dbsJson = az sql db list --resource-group $resourceGroup --server $sqlServer --
 Assert-Az 'az sql db list'
 $dbs = @(ConvertFrom-Json ($dbsJson -join "`n") | ForEach-Object { $_ } | Where-Object { $_.name -ne 'master' })
 Write-Host "SQL databases on ${sqlServer}: $($dbs.Count) (free offer allows 10 per subscription)"
-foreach ($db in ($dbs | Sort-Object name)) { Write-Host "      $($db.name)  status: $($db.status)" }
+$vcoresUsed = 0
+foreach ($db in ($dbs | Sort-Object name)) { $vcoresUsed += [int]$db.sku.capacity; Write-Host "      $($db.name)  status: $($db.status)  max vCores: $($db.sku.capacity)" }
+# The subscription's vCore quota is 10 in total (separate from the free-offer count). New databases need 1 each; with no
+# room left, a PR environment or a new tenant fails to create its database (SubscriptionVcoreQuotaExceeded).
+Write-Host "Max vCores in use on ${sqlServer}: $vcoresUsed of 10 (the subscription quota; databases elsewhere would add to this)"
+if ($vcoresUsed -ge 10) { $warnings.Add("No vCores left for a new database ($vcoresUsed of 10): PR environments and new tenants will fail") }
+elseif ($vcoresUsed -ge 8) { $warnings.Add("Only $(10 - $vcoresUsed) vCores left for new databases ($vcoresUsed of 10 in use)") }
 if ($dbs.Count -ge $maxFreeDbs) { $failures.Add("Database count $($dbs.Count) has reached the free-offer limit of $maxFreeDbs") }
 elseif ($dbs.Count -ge $warnAtDbs) { $warnings.Add("Database count $($dbs.Count) is close to the free-offer limit of $maxFreeDbs") }
 

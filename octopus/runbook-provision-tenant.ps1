@@ -67,14 +67,23 @@ Assert-Az 'az sql db list'
 if ($dbFound) {
     Write-Host "Database $dbName already exists; keeping it."
 } else {
-    # Stay inside the free offer: Azure allows up to 10 free databases per subscription (counted here per server).
-    # (Keep the --query free of parentheses and ! : Windows PowerShell 5.1 passes it to az.cmd unquoted, and cmd.exe chokes.)
-    $allDbs = @(az sql db list --resource-group $resourceGroup --server $sqlServer --query "[].name" --output tsv --only-show-errors)
-    Assert-Az 'az sql db list (count)'
-    $dbCount = @($allDbs | Where-Object { $_ -and $_.Trim() -ne 'master' }).Count
-    if ($dbCount -ge 9) { throw "Refusing to create ${dbName}: $dbCount databases already exist on $sqlServer (free offer allows 10 per subscription)." }
+    # Two limits matter (both are per subscription; here they are counted per server, so this is a lower bound):
+    #   - the free offer allows 10 free databases;
+    #   - the subscription's vCore quota is 10 TOTAL max vCores. This once blocked a PR environment: five 2-vCore databases = 10.
+    # New databases are created with 1 max vCore, so check there is room for one more.
+    $dbsJson = az sql db list --resource-group $resourceGroup --server $sqlServer --output json --only-show-errors
+    Assert-Az 'az sql db list (limits)'
+    # Windows PowerShell 5.1 returns a JSON array from ConvertFrom-Json as ONE object, so unroll it.
+    $allDbs = @(ConvertFrom-Json ($dbsJson -join "`n") | ForEach-Object { $_ } | Where-Object { $_.name -ne 'master' })
+    $dbCount = $allDbs.Count
+    $vcoresUsed = 0
+    foreach ($d in $allDbs) { $vcoresUsed += [int]$d.sku.capacity }
+    if ($dbCount -ge 10) { throw "Refusing to create ${dbName}: $dbCount databases already exist on $sqlServer (free offer allows 10 per subscription)." }
+    # Keep 2 vCores free for PR environments (the PR script allows 2 PR apps, 1 vCore each) so tenants can't starve them.
+    $prReserve = 2
+    if ($vcoresUsed + 1 -gt 10 - $prReserve) { throw "Refusing to create ${dbName}: databases on $sqlServer already use $vcoresUsed of the subscription's 10 vCores, and $prReserve are kept free for PR environments." }
     az sql db create --resource-group $resourceGroup --server $sqlServer --name $dbName `
-        --edition GeneralPurpose --family Gen5 --capacity 2 --compute-model Serverless `
+        --edition GeneralPurpose --family Gen5 --capacity 1 --compute-model Serverless `
         --use-free-limit --free-limit-exhaustion-behavior AutoPause --output none --only-show-errors
     Assert-Az 'az sql db create'
     Write-Host "Created database $dbName (free offer, AutoPause)."
