@@ -64,15 +64,17 @@ fails (goes red) when something is wrong. The checklist below is what a human ad
 ## Not verified yet (as of 2026-11-20 CT)
 - **The schedule has not fired yet.** The trigger exists and is enabled (checked in Octopus), but no scheduled run has
   been observed. After the first 13:00 UTC, confirm a "Run Daily health check" task appears.
-- **PR-environment deployment with the current `octopus/deploy-step.ps1`** (tenant branch included): Dev and Staging
-  deployments with it passed; a PR environment with it had not been run when this was written.
+- **Teardown of a PR environment with the current scripts** (closing or merging a PR): provisioning and deploying were
+  verified on PR #9's environment (`pr-9`, 2026-11-20 CT: database at 1 vCore with the free offer, app deployed with
+  the current `deploy-step.ps1`, the page loads), and the "Deprovision PR environment" runbook was verified by hand, but
+  the automatic teardown when this PR closes had not been observed yet.
 - **Untested script paths:** `runbook-provision-tenant.ps1` when the tenant app already exists (it should do nothing and
   exit 0), and its refusal paths (10 databases on the server, vCore total above 8, tenant app cap of 4, bad or reserved
   slug). The slug check was tested only as a regex; the vCore summing was tested on sample JSON and, via the daily
   check, on real output, but the tenant script's new guard has not run for real.
-- **Creating a database at 1 vCore with the CLI:** lowering existing databases in the Azure portal was verified, but
-  `az sql db create ... --capacity 1 --use-free-limit` (used by the PR and tenant runbooks) has not yet been run, so
-  that it succeeds and keeps the free offer is expected, not confirmed. The same goes for a PR environment at 1 vCore.
+- **Creating a database at 1 vCore with the CLI for a tenant:** `az sql db create ... --capacity 1 --use-free-limit` was
+  verified through the PR runbook (`pr-8` by hand, `pr-9` automatically: free offer, AutoPause), but the tenant
+  provisioning runbook has not created a database since the change.
 - **Startup speed at 1 vCore:** whether 1 max vCore slows `Database.Migrate()` enough to hurt app startup after a
   database resumes (see "Known traps" in CLAUDE.md) has not been measured.
 - **The exact Octopus variable name for the feature-flag client identifier.** A real deployment sets the identifier
