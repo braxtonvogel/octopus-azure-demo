@@ -16,6 +16,26 @@ foreach ($pair in @(@('AppName', $appName), @('ResourceGroup', $resourceGroup),
                     @('notes-image version', $version))) {
     if ([string]::IsNullOrWhiteSpace($pair[1])) { throw "Missing value: $($pair[0]) (check variable scoping for $($OctopusParameters['Octopus.Environment.Name']))." }
 }
+# Multi-tenant Production: a deployment for a tenant targets that tenant's own Container App, notes-app-<TenantSlug>
+# (TenantSlug is a per-tenant project template variable). Untenanted deployments keep using AppName above.
+if (-not [string]::IsNullOrWhiteSpace($OctopusParameters['Octopus.Deployment.Tenant.Id'])) {
+    $tenantSlug = $OctopusParameters['TenantSlug']
+    # <= 20 chars so "notes-app-" + slug fits ACA's 32-char name limit; 'pr-' is reserved for PR environments.
+    # Case-sensitive match and \z (not $) so 'Tenant-A' or a trailing newline can't slip through.
+    # Azure Container App names also forbid two dashes in a row ('--').
+    if ($tenantSlug -cnotmatch '^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?\z' -or $tenantSlug -match '--' -or $tenantSlug -like 'pr-*') {
+        throw "Tenant '$($OctopusParameters['Octopus.Deployment.Tenant.Name'])' has an invalid TenantSlug '$tenantSlug' (lowercase letters, digits, single dashes; max 20; not pr-*)."
+    }
+    # Never send a tenant deployment to the fixed apps (for example a slug of 'dev' or 'staging').
+    if (@('notes-app', 'notes-app-dev', 'notes-app-staging') -contains "notes-app-$tenantSlug") {
+        throw "TenantSlug '$tenantSlug' would collide with the fixed app notes-app-$tenantSlug."
+    }
+    if ($OctopusParameters['Octopus.Environment.Name'] -ne 'Production') {
+        throw "Tenant deployments are only supported in Production, not '$($OctopusParameters['Octopus.Environment.Name'])'."
+    }
+    $appName = "notes-app-$tenantSlug"
+    Write-Host "Tenant deployment: $($OctopusParameters['Octopus.Deployment.Tenant.Name']) -> $appName"
+}
 # Main channel: only pinned 1.0.N builds from main. PR Environments channel: also 1.0.0-pr.<PR>.<run> images,
 # and only onto notes-app-pr-* apps, so a PR image can never reach Dev, Staging, or Prod.
 $channel     = $OctopusParameters['Octopus.Release.Channel.Name']
